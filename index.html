@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Book Tracker</title>
+  <!-- Tailwind CSS (CDN de desarrollo: suficiente para las pruebas) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- JSZip: para abrir los EPUB en el navegador -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!-- Google Identity Services (permiso de Drive) y Google API loader (selector de archivos) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://apis.google.com/js/api.js" async defer></script>
+  <style>
+    :focus-visible { outline: 2px solid #818cf8; outline-offset: 2px; }
+    select option { background: #0f172a; color: #e2e8f0; }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-900 font-sans text-slate-100">
+
+  <!-- ===================== 1. ACCESO ===================== -->
+  <section id="view-login" class="hidden min-h-screen items-center justify-center p-4">
+    <div class="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-800 p-8 shadow-xl">
+      <h1 class="text-3xl font-bold text-indigo-400">Book Tracker</h1>
+      <p class="mt-1 text-sm text-slate-400">Tus libros de Google Drive, en un solo lugar.</p>
+
+      <div id="config-warning" class="hidden mt-4 space-y-2 rounded-xl border border-amber-700 bg-amber-950/60 p-4 text-sm text-amber-200" role="alert"></div>
+
+      <div class="mt-6 grid grid-cols-2 gap-1 rounded-lg bg-slate-900 p-1 text-sm" role="tablist">
+        <button id="tab-signin" type="button" role="tab" class="rounded-md px-3 py-2 font-medium">Ingresar</button>
+        <button id="tab-signup" type="button" role="tab" class="rounded-md px-3 py-2 font-medium">Crear cuenta</button>
+      </div>
+
+      <form id="auth-form" class="mt-4 space-y-3" novalidate>
+        <div>
+          <label for="auth-email" class="mb-1 block text-xs text-slate-400">Correo</label>
+          <input id="auth-email" type="email" autocomplete="email" required class="w-full rounded-lg border border-slate-700 bg-slate-900 p-3 text-white focus:border-indigo-500 focus:outline-none">
+        </div>
+        <div>
+          <label for="auth-pass" class="mb-1 block text-xs text-slate-400">Contraseña</label>
+          <input id="auth-pass" type="password" autocomplete="current-password" required class="w-full rounded-lg border border-slate-700 bg-slate-900 p-3 text-white focus:border-indigo-500 focus:outline-none">
+          <p id="pass-hint" class="mt-1 hidden text-[11px] text-slate-500">Mínimo 8 caracteres.</p>
+        </div>
+        <button id="auth-submit" type="submit" class="w-full rounded-lg bg-indigo-600 py-3 font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50">Ingresar</button>
+      </form>
+
+      <button id="forgot-btn" type="button" class="mt-3 text-xs text-slate-400 underline hover:text-white">Olvidé mi contraseña</button>
+
+      <div class="my-4 flex items-center gap-3 text-xs text-slate-500"><span class="h-px flex-1 bg-slate-700"></span>o<span class="h-px flex-1 bg-slate-700"></span></div>
+
+      <button id="google-btn" type="button" class="w-full rounded-lg border border-slate-600 bg-slate-900 py-3 text-sm font-medium text-slate-100 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50">Continuar con Google</button>
+
+      <p id="auth-error" class="hidden mt-4 text-sm text-red-400" role="alert"></p>
+      <p id="auth-info" class="hidden mt-4 text-sm text-emerald-300" role="status"></p>
+    </div>
+  </section>
+
+  <!-- ===================== 2. VERIFICAR CORREO ===================== -->
+  <section id="view-verify" class="hidden min-h-screen items-center justify-center p-4">
+    <div class="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-800 p-8 shadow-xl">
+      <h1 class="text-2xl font-bold text-indigo-400">Verifica tu correo</h1>
+      <p class="mt-3 text-sm text-slate-300">Enviamos un mensaje de verificación a <strong id="verify-email" class="text-white"></strong>. Abre el enlace del mensaje y vuelve aquí. Revisa también la carpeta de spam.</p>
+      <div class="mt-6 space-y-3">
+        <button id="verify-check" type="button" class="w-full rounded-lg bg-indigo-600 py-3 font-medium text-white transition hover:bg-indigo-500 disabled:opacity-50">Ya verifiqué mi correo</button>
+        <button id="verify-resend" type="button" class="w-full rounded-lg border border-slate-600 bg-slate-900 py-3 text-sm text-slate-100 transition hover:bg-slate-700 disabled:opacity-50">Reenviar mensaje</button>
+        <button id="verify-signout" type="button" class="text-xs text-slate-400 underline hover:text-white">Salir</button>
+      </div>
+      <p id="verify-msg" class="mt-4 hidden text-sm" role="status"></p>
+    </div>
+  </section>
+
+  <!-- ===================== 3. APP ===================== -->
+  <div id="view-app" class="hidden min-h-screen">
+    <div class="flex min-h-screen flex-col">
+      <header class="flex items-center justify-between border-b border-slate-700 bg-slate-800 px-6 py-4">
+        <div class="flex items-center gap-3">
+          <span class="text-xl font-bold text-indigo-400">BookTracker</span>
+          <span class="rounded-full border border-emerald-800 bg-emerald-950 px-2.5 py-1 text-xs text-emerald-300">Sincronizado</span>
+        </div>
+        <div class="flex items-center gap-4">
+          <span id="user-email" class="hidden text-sm text-slate-400 sm:inline"></span>
+          <button id="logout-btn" type="button" class="text-xs text-slate-400 underline hover:text-white">Salir</button>
+        </div>
+      </header>
+
+      <main class="mx-auto w-full max-w-7xl flex-1 space-y-6 p-6">
+        <div id="alerts" class="space-y-3"></div>
+
+        <div class="grid gap-4 md:grid-cols-3">
+          <!-- Meta anual -->
+          <div class="rounded-2xl border border-slate-700 bg-slate-800 p-5">
+            <h2 class="text-sm font-semibold text-white">Meta anual de lectura</h2>
+            <div id="goal-empty" class="mt-3 hidden">
+              <p class="text-sm text-slate-400">¿Cuántos libros quieres leer este año?</p>
+              <div class="mt-3 flex gap-2">
+                <input id="goal-input" type="number" min="1" max="1000" inputmode="numeric" aria-label="Meta anual en libros" class="w-24 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none">
+                <button id="goal-save" type="button" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500">Guardar</button>
+                <button id="goal-cancel" type="button" class="hidden rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700">Cancelar</button>
+              </div>
+            </div>
+            <div id="goal-ring" class="mt-3 hidden items-center gap-4">
+              <svg viewBox="0 0 100 100" class="h-24 w-24 shrink-0 -rotate-90" role="img" aria-label="Progreso de la meta anual">
+                <circle cx="50" cy="50" r="42" fill="none" stroke="#1e293b" stroke-width="10"></circle>
+                <circle id="ring-arc" cx="50" cy="50" r="42" fill="none" stroke="#818cf8" stroke-width="10" stroke-linecap="round" stroke-dasharray="263.9" stroke-dashoffset="263.9"></circle>
+              </svg>
+              <div class="min-w-0">
+                <p id="ring-pct" class="text-2xl font-bold text-white">0%</p>
+                <p id="ring-detail" class="text-xs text-slate-400"></p>
+                <button id="goal-edit" type="button" class="mt-1 text-[11px] text-indigo-300 underline hover:text-white">Cambiar meta</button>
+              </div>
+            </div>
+            <p id="ring-pace" class="mt-3 hidden text-xs text-slate-300"></p>
+            <p id="ring-proj" class="mt-1 hidden text-xs text-slate-500"></p>
+          </div>
+
+          <!-- Conteos -->
+          <div class="rounded-2xl border border-slate-700 bg-slate-800 p-5">
+            <h2 class="text-sm font-semibold text-white">Tu biblioteca</h2>
+            <dl class="mt-3 grid grid-cols-3 gap-2 text-center">
+              <div class="rounded-lg bg-slate-900 p-3"><dt class="text-[11px] text-slate-400">Libros</dt><dd id="cnt-total" class="text-xl font-bold text-white">0</dd></div>
+              <div class="rounded-lg bg-slate-900 p-3"><dt class="text-[11px] text-slate-400">Leyendo</dt><dd id="cnt-reading" class="text-xl font-bold text-amber-300">0</dd></div>
+              <div class="rounded-lg bg-slate-900 p-3"><dt class="text-[11px] text-slate-400">Leídos</dt><dd id="cnt-read" class="text-xl font-bold text-emerald-300">0</dd></div>
+            </dl>
+          </div>
+
+          <!-- Google Drive -->
+          <div class="rounded-2xl border border-indigo-800/80 bg-indigo-950/60 p-5">
+            <h2 class="text-sm font-semibold text-white">Google Drive</h2>
+            <p id="drive-status" class="mt-2 text-xs text-indigo-200"></p>
+            <p id="drive-folder" class="mt-1 truncate text-sm font-medium text-white"></p>
+            <div id="drive-actions" class="mt-3 flex flex-wrap gap-2"></div>
+            <p class="mt-3 text-[11px] leading-relaxed text-indigo-300/80">Book Tracker solo puede ver los libros que tú elijas. No puede ver ni tocar nada más de tu Drive, y puedes retirar el permiso cuando quieras.</p>
+          </div>
+        </div>
+
+        <!-- Libros -->
+        <div class="rounded-2xl border border-slate-700 bg-slate-800 p-6">
+          <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <h2 class="text-lg font-bold text-white">Tus libros</h2>
+            <div class="flex flex-col gap-2 sm:flex-row">
+              <input id="search" type="search" placeholder="Buscar por título o autor" aria-label="Buscar libros" class="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none sm:w-60">
+              <select id="filter-status" aria-label="Filtrar por estado" class="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200">
+                <option value="all">Todos los estados</option>
+                <option value="todo">Por leer</option>
+                <option value="reading">Leyendo</option>
+                <option value="read">Leídos</option>
+              </select>
+              <select id="sort-by" aria-label="Ordenar" class="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200">
+                <option value="title">Título de A a Z</option>
+                <option value="author">Autor de A a Z</option>
+                <option value="recent">Agregados recientemente</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="status-box" aria-live="polite" class="rounded-xl border-2 border-dashed border-slate-700/60 px-4 py-12 text-center">
+            <p id="status-title" class="font-medium text-slate-200"></p>
+            <p id="status-body" class="mt-1 text-sm text-slate-400"></p>
+          </div>
+
+          <div id="library-meta" class="mb-3 hidden items-center justify-between text-xs text-slate-500">
+            <span id="results-count"></span>
+            <button id="ignored-toggle" type="button" class="underline hover:text-slate-300"></button>
+          </div>
+          <div id="books-grid" class="hidden grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"></div>
+        </div>
+
+        <!-- Diagnóstico de pruebas -->
+        <details class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+          <summary class="cursor-pointer text-sm font-semibold text-slate-200">Diagnóstico de pruebas</summary>
+          <dl id="diag" class="mt-3 grid gap-x-6 gap-y-1 text-xs text-slate-400 sm:grid-cols-2"></dl>
+          <div class="mt-3 flex items-center justify-between">
+            <p class="text-xs text-slate-500">Registro de eventos (se pierde al recargar)</p>
+            <button id="log-copy" type="button" class="rounded-lg border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:bg-slate-700">Copiar registro</button>
+          </div>
+          <pre id="log" class="mt-2 max-h-64 overflow-auto rounded-lg bg-slate-900 p-3 text-[11px] leading-relaxed text-slate-400"></pre>
+        </details>
+      </main>
+    </div>
+  </div>
+
+  <script type="module">
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js';
+  import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, sendEmailVerification, sendPasswordResetEmail, signOut, reload } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js';
+  import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, onSnapshot, writeBatch } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js';
+
+  // =====================================================================
+  // CONFIGURACIÓN: completa estos valores (la guía te dice de dónde sale cada uno)
+  // =====================================================================
+  const FIREBASE_CONFIG = {
+    apiKey: 'TU_FIREBASE_API_KEY',
+    authDomain: 'TU_PROYECTO.firebaseapp.com',
+    projectId: 'TU_PROYECTO',
+    appId: 'TU_APP_ID',
+    messagingSenderId: '000000000000',   // es el "número de proyecto" de Google Cloud
+  };
+  const GOOGLE_CLIENT_ID = 'TU_CLIENT_ID.apps.googleusercontent.com';  // cliente OAuth "Aplicación web"
+  const GOOGLE_API_KEY = 'TU_API_KEY_DEL_SELECTOR';                    // clave de API con Picker API y Drive API
+
+  // Permiso de Drive: solo los archivos que el usuario elige con el selector de Google
+  const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+  const PROJECT_NUMBER = FIREBASE_CONFIG.messagingSenderId;
+  // Formatos aceptados. Para probar PDF, agrega: pdf: 'PDF' (sin lectura de datos internos)
+  const ACCEPTED = { epub: 'EPUB' };
+  const MAX_EPUB_BYTES = 80 * 1024 * 1024;
+  const META_CONCURRENCY = 2;     // EPUB procesados a la vez
+  const META_PAUSE_MS = 250;      // pausa entre libros del mismo carril
+  const COVER_MAX_W = 200;
+  const WRITE_BATCH = 400;        // Firestore admite 500 operaciones por lote
+
+  // =====================================================================
+  // UTILIDADES Y ESTADO
+  // =====================================================================
+  class AppError extends Error { constructor(code, message) { super(message); this.code = code; } }
+
+  const $ = (id) => document.getElementById(id);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const isPlaceholder = (v) => !v || /TU_|000000000000/.test(String(v));
+
+  function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+
+  const state = {
+    mode: 'signin',
+    started: false,
+    user: null,
+    profile: null,
+    books: new Map(),
+    unsubBooks: null,
+    tokenClient: null,
+    pending: null,
+    driveToken: null,
+    driveExpires: 0,
+    driveUser: null,
+    pickerReady: false,
+    query: '', filter: 'all', sort: 'title', showIgnored: false, editingGoal: false,
+    queue: [], queued: new Set(), active: 0,
+    observer: undefined,
+    logs: [],
+  };
+
+  let app, auth, db;
+  let firebaseOk = false, driveOk = false;
+
+  function log(msg, data) {
+    const line = new Date().toLocaleTimeString('es') + '  ' + msg + (data !== undefined ? '  ' + JSON.stringify(data) : '');
+    state.logs.push(line);
+    if (state.logs.length > 300) state.logs.shift();
+    const pre = $('log');
+    if (pre) { pre.textContent = state.logs.join('\n'); pre.scrollTop = pre.scrollHeight; }
+    console.log('[BookTracker]', msg, data !== undefined ? data : '');
+  }
+
+  function waitFor(test, message, timeout = 10000) {
+    return new Promise((resolve, reject) => {
+      const t0 = Date.now();
+      (function tick() {
+        let ok = false;
+        try { ok = !!test(); } catch (e) { ok = false; }
+        if (ok) return resolve();
+        if (Date.now() - t0 > timeout) return reject(new AppError('network', message));
+        setTimeout(tick, 100);
+      })();
+    });
+  }
+
+  const extOf = (name) => { const i = String(name).lastIndexOf('.'); return i > -1 ? name.slice(i + 1).toLowerCase() : ''; };
+  const cleanName = (name) => String(name).replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ').trim();
+  const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const bookTitle = (b) => b.title || cleanName(b.name);
+
+  function formatSize(bytes) {
+    let v = Number(bytes);
+    if (!v) return '';
+    const u = ['B', 'KB', 'MB', 'GB']; let i = 0;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return (i === 0 ? v : v.toFixed(v >= 10 ? 0 : 1)) + ' ' + u[i];
+  }
+
+  // ----- Alertas con clave (evitan duplicados) -----
+  const alertNodes = new Map();
+  function clearAlert(key) { const n = alertNodes.get(key); if (n) { n.remove(); alertNodes.delete(key); } }
+  function setAlert(key, kind, text, action) {
+    clearAlert(key);
+    const styles = {
+      error: 'border-red-800 bg-red-950/60 text-red-200',
+      warn: 'border-amber-700 bg-amber-950/60 text-amber-200',
+      info: 'border-slate-600 bg-slate-800 text-slate-300',
+      ok: 'border-emerald-800 bg-emerald-950/60 text-emerald-200',
+    };
+    const box = el('div', 'flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4 text-sm ' + styles[kind]);
+    box.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    box.appendChild(el('p', 'min-w-0 flex-1', text));
+    const actions = el('div', 'flex gap-2');
+    if (action) {
+      const b = el('button', 'rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-100', action.label);
+      b.type = 'button'; b.addEventListener('click', action.onClick); actions.appendChild(b);
+    }
+    const x = el('button', 'rounded-lg border border-current px-2 py-1 text-xs opacity-70 hover:opacity-100', 'Cerrar');
+    x.type = 'button'; x.addEventListener('click', () => clearAlert(key)); actions.appendChild(x);
+    box.appendChild(actions);
+    alertNodes.set(key, box);
+    $('alerts').appendChild(box);
+  }
+
+  // =====================================================================
+  // FIREBASE: AUTENTICACIÓN
+  // =====================================================================
+  const AUTH_ERRORS = {
+    'auth/invalid-email': 'El correo no es válido.',
+    'auth/missing-email': 'Escribe tu correo.',
+    'auth/missing-password': 'Escribe tu contraseña.',
+    'auth/weak-password': 'La contraseña es muy débil. Usa al menos 8 caracteres.',
+    'auth/email-already-in-use': 'Ese correo ya tiene una cuenta. Prueba con Ingresar.',
+    'auth/user-not-found': 'No existe una cuenta con ese correo.',
+    'auth/wrong-password': 'Correo o contraseña incorrectos.',
+    'auth/invalid-credential': 'Correo o contraseña incorrectos.',
+    'auth/too-many-requests': 'Demasiados intentos. Espera unos minutos y vuelve a intentar.',
+    'auth/network-request-failed': 'Sin conexión con Firebase. Revisa tu internet.',
+    'auth/popup-closed-by-user': 'Cerraste la ventana de Google antes de terminar.',
+    'auth/cancelled-popup-request': 'Ya hay una ventana de Google abierta.',
+    'auth/popup-blocked': 'El navegador bloqueó la ventana. Permite las ventanas emergentes de este sitio.',
+    'auth/unauthorized-domain': 'Este sitio no está autorizado en Firebase. Agrégalo en Authentication > Configuración > Dominios autorizados.',
+    'auth/operation-not-allowed': 'Ese método de acceso no está activado. Actívalo en Firebase > Authentication > Método de acceso.',
+    'auth/invalid-api-key': 'La API key de Firebase no es válida. Revisa FIREBASE_CONFIG.',
+  };
+  const authMsg = (e) => AUTH_ERRORS[e && e.code] || ('No se pudo completar la operación (' + ((e && (e.code || e.message)) || 'error') + ').');
+
+  function showView(name) {
+    for (const v of ['login', 'verify', 'app']) {
+      const node = $('view-' + v);
+      node.classList.toggle('hidden', v !== name);
+      node.classList.toggle('flex', v !== 'app' && v === name);
+    }
+  }
+
+  function setMode(mode) {
+    state.mode = mode;
+    const signup = mode === 'signup';
+    $('tab-signin').className = 'rounded-md px-3 py-2 font-medium ' + (!signup ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white');
+    $('tab-signup').className = 'rounded-md px-3 py-2 font-medium ' + (signup ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white');
+    $('tab-signin').setAttribute('aria-selected', String(!signup));
+    $('tab-signup').setAttribute('aria-selected', String(signup));
+    $('auth-submit').textContent = signup ? 'Crear cuenta' : 'Ingresar';
+    $('auth-pass').autocomplete = signup ? 'new-password' : 'current-password';
+    $('pass-hint').classList.toggle('hidden', !signup);
+    $('forgot-btn').classList.toggle('hidden', signup);
+    clearAuthMsgs();
+  }
+
+  function clearAuthMsgs() { $('auth-error').classList.add('hidden'); $('auth-info').classList.add('hidden'); }
+  function showAuthError(t) { $('auth-info').classList.add('hidden'); const n = $('auth-error'); n.textContent = t; n.classList.remove('hidden'); }
+  function showAuthInfo(t) { $('auth-error').classList.add('hidden'); const n = $('auth-info'); n.textContent = t; n.classList.remove('hidden'); }
+  function setAuthBusy(b) { for (const id of ['auth-submit', 'google-btn']) $(id).disabled = b || !firebaseOk; }
+
+  async function onAuthSubmit(ev) {
+    ev.preventDefault();
+    if (!firebaseOk) return;
+    const email = $('auth-email').value.trim();
+    const pass = $('auth-pass').value;
+    clearAuthMsgs();
+    if (!email) return showAuthError('Escribe tu correo.');
+    if (state.mode === 'signup' && pass.length < 8) return showAuthError('La contraseña debe tener al menos 8 caracteres.');
+    setAuthBusy(true);
+    try {
+      if (state.mode === 'signup') {
+        const cred = await createUserWithEmailAndPassword(auth, email, pass);
+        await sendEmailVerification(cred.user);
+      } else {
+        await signInWithEmailAndPassword(auth, email, pass);
+      }
+    } catch (e) {
+      log('Error de acceso', { code: e && e.code });
+      showAuthError(authMsg(e));
+    } finally { setAuthBusy(false); }
+  }
+
+  async function onGoogleSignIn() {
+    if (!firebaseOk) return;
+    clearAuthMsgs(); setAuthBusy(true);
+    try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+    catch (e) { log('Error con Google', { code: e && e.code }); showAuthError(authMsg(e)); }
+    finally { setAuthBusy(false); }
+  }
+
+  async function onForgot() {
+    if (!firebaseOk) return;
+    const email = $('auth-email').value.trim();
+    clearAuthMsgs();
+    if (!email) return showAuthError('Escribe tu correo arriba y vuelve a presionar.');
+    try { await sendPasswordResetEmail(auth, email); showAuthInfo('Si el correo tiene una cuenta, recibirá un mensaje para restablecer la contraseña.'); }
+    catch (e) { showAuthError(authMsg(e)); }
+  }
+
+  function verifyMsg(text, ok) {
+    const n = $('verify-msg');
+    n.textContent = text;
+    n.className = 'mt-4 text-sm ' + (ok ? 'text-emerald-300' : 'text-amber-300');
+  }
+
+  async function onVerifyCheck() {
+    const btn = $('verify-check'); btn.disabled = true;
+    try {
+      const u = auth.currentUser;
+      await reload(u);
+      await u.getIdToken(true);   // actualiza el permiso de Firestore con el correo ya verificado
+      if (u.emailVerified) await startApp(u);
+      else verifyMsg('Todavía no aparece verificado. Abre el enlace del mensaje y vuelve a intentar.', false);
+    } catch (e) { verifyMsg(authMsg(e), false); }
+    finally { btn.disabled = false; }
+  }
+
+  async function onVerifyResend() {
+    const btn = $('verify-resend'); btn.disabled = true;
+    try { await sendEmailVerification(auth.currentUser); verifyMsg('Mensaje reenviado. Puede tardar un par de minutos.', true); }
+    catch (e) { verifyMsg(authMsg(e), false); }
+    finally { setTimeout(() => { btn.disabled = false; }, 15000); }
+  }
+
+  async function doSignOut() {
+    try { await signOut(auth); } catch (e) { log('Error al salir', { code: e && e.code }); }
+  }
+
+  // =====================================================================
+  // FIREBASE: DATOS (Firestore)
+  // =====================================================================
+  const userRef = () => doc(db, 'users', state.user.uid);
+  const bookRef = (id) => doc(db, 'users', state.user.uid, 'books', id);
+
+  function firestoreProblem(e) {
+    log('Error de Firestore', { code: e && e.code, message: e && e.message });
+    if (e && e.code === 'permission-denied') {
+      setAlert('firestore', 'error', 'Firestore rechazó el acceso. Revisa que hayas pegado las reglas de firestore.rules y que tu correo esté verificado.');
+    } else if (e && e.code === 'failed-precondition' || e && e.code === 'not-found') {
+      setAlert('firestore', 'error', 'Firestore no está creado o no está disponible en este proyecto. Créalo en la consola de Firebase (Firestore Database).');
+    } else {
+      setAlert('firestore', 'error', 'No se pudo guardar o leer en Firestore (' + ((e && (e.code || e.message)) || 'error') + ').');
+    }
+  }
+
+  async function loadProfile() {
+    const ref = userRef();
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      state.profile = snap.data();
+    } else {
+      state.profile = { email: state.user.email || '', goalBooks: null, drive: null, createdAt: new Date().toISOString() };
+      await setDoc(ref, state.profile);
+    }
+  }
+
+  function subscribeBooks() {
+    if (state.unsubBooks) state.unsubBooks();
+    state.unsubBooks = onSnapshot(collection(db, 'users', state.user.uid, 'books'), (snap) => {
+      const m = new Map();
+      snap.forEach((d) => m.set(d.id, Object.assign({ id: d.id }, d.data())));
+      state.books = m;
+      clearAlert('firestore');
+      scheduleRender();
+    }, firestoreProblem);
+  }
+
+  async function startApp(user) {
+    if (state.started && state.user && state.user.uid === user.uid) return;
+    state.started = true;
+    state.user = user;
+    try {
+      await loadProfile();
+    } catch (e) { firestoreProblem(e); state.profile = state.profile || { goalBooks: null, drive: null }; }
+    $('user-email').textContent = user.email || '';
+    $('user-email').classList.remove('hidden');
+    showView('app');
+    log('Sesión iniciada', { uid: user.uid, verificado: user.emailVerified });
+    subscribeBooks();
+    if (driveOk) ensureTokenClient().catch((e) => log('Google Identity Services no cargó', { msg: e.message }));
+    renderAll();
+  }
+
+  function teardownApp() {
+    if (state.unsubBooks) { state.unsubBooks(); state.unsubBooks = null; }
+    Object.assign(state, {
+      started: false, user: null, profile: null, books: new Map(),
+      driveToken: null, driveExpires: 0, driveUser: null,
+      queue: [], queued: new Set(), query: '', filter: 'all', showIgnored: false,
+    });
+    for (const k of [...alertNodes.keys()]) clearAlert(k);
+    $('books-grid').replaceChildren();
+    $('search').value = ''; $('filter-status').value = 'all';
+  }
+
+  // =====================================================================
+  // GOOGLE DRIVE: PERMISO (Google Identity Services)
+  // =====================================================================
+  async function ensureTokenClient() {
+    if (state.tokenClient) return;
+    await waitFor(() => window.google && google.accounts && google.accounts.oauth2,
+      'No se pudo cargar el servicio de acceso de Google. Revisa tu conexión o desactiva bloqueadores de contenido para este sitio.');
+    state.tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: DRIVE_SCOPE,
+      callback: (resp) => {
+        const p = state.pending; state.pending = null;
+        if (!p) return;
+        if (resp.error) return p.reject(driveAuthError(resp.error, resp.error_description));
+        if (!google.accounts.oauth2.hasGrantedAllScopes(resp, DRIVE_SCOPE)) return p.reject(driveAuthError('scope_denied'));
+        state.driveToken = resp.access_token;
+        state.driveExpires = Date.now() + (Number(resp.expires_in) - 60) * 1000;
+        p.resolve(resp.access_token);
+      },
+      error_callback: (err) => {
+        const p = state.pending; state.pending = null;
+        if (p) p.reject(driveAuthError(err && err.type ? err.type : 'popup_error'));
+      },
+    });
+  }
+
+  function driveAuthError(code, detail) {
+    const m = {
+      access_denied: 'No diste permiso a Book Tracker para usar tus libros de Drive. Vuelve a intentar y acepta el permiso.',
+      scope_denied: 'Falta el permiso de Drive. Vuelve a conectar y acepta lo que se pide.',
+      popup_closed: 'Se cerró la ventana de Google antes de terminar. Si viste el error "origin_mismatch", falta agregar ' + location.origin + ' en "Orígenes autorizados de JavaScript" del cliente OAuth.',
+      popup_failed_to_open: 'El navegador bloqueó la ventana de Google. Permite las ventanas emergentes de este sitio y vuelve a intentar.',
+      invalid_client: 'El GOOGLE_CLIENT_ID no es válido. Revisa que esté copiado completo.',
+    };
+    return new AppError('auth', m[code] || ('No se pudo conectar con Google Drive (' + (detail || code) + ').'));
+  }
+
+  const hasValidToken = () => !!state.driveToken && Date.now() < state.driveExpires;
+
+  async function requestDriveToken() {
+    await ensureTokenClient();
+    return new Promise((resolve, reject) => {
+      state.pending = { resolve, reject };
+      const opts = { prompt: '' };
+      if (state.user && state.user.email) opts.hint = state.user.email;
+      state.tokenClient.requestAccessToken(opts);
+    });
+  }
+
+  async function driveFetch(url, attempt = 0) {
+    let res;
+    try { res = await fetch(url, { headers: { Authorization: 'Bearer ' + state.driveToken } }); }
+    catch (e) { throw new AppError('network', 'Sin conexión con Google Drive. Revisa tu internet.'); }
+    if (res.ok) return res;
+    let body = null;
+    try { body = await res.json(); } catch (e) { /* sin cuerpo JSON */ }
+    const er = body && body.error;
+    const reason = (er && ((er.errors && er.errors[0] && er.errors[0].reason) || (er.details && er.details.find((d) => d.reason) && er.details.find((d) => d.reason).reason) || er.status)) || '';
+    if (res.status === 401) { state.driveToken = null; throw new AppError('auth', 'La sesión de Google Drive venció. Vuelve a conectar.'); }
+    if (res.status === 404) throw new AppError('gone', 'Ya no tenemos acceso a este archivo. Puedes volver a agregarlo con el selector.');
+    const retryable = res.status === 429 || res.status >= 500 || (res.status === 403 && /rateLimit/i.test(reason));
+    if (retryable && attempt < 3) { await sleep(600 * Math.pow(2, attempt)); return driveFetch(url, attempt + 1); }
+    if (res.status === 403 && /accessNotConfigured|SERVICE_DISABLED/.test(reason)) {
+      throw new AppError('config', 'La API de Google Drive no está habilitada en tu proyecto de Google Cloud. Actívala en "APIs y servicios > Biblioteca".');
+    }
+    throw new AppError('drive', 'Google Drive respondió con error ' + res.status + (er && er.message ? ': ' + er.message : '') + '.');
+  }
+
+  async function loadDriveUser() {
+    try {
+      const res = await driveFetch('https://www.googleapis.com/drive/v3/about?fields=user(displayName,emailAddress)');
+      const data = await res.json();
+      state.driveUser = (data && data.user) || null;
+      log('Cuenta de Drive', { email: state.driveUser && state.driveUser.emailAddress });
+    } catch (e) { log('No se pudo leer la cuenta de Drive', { msg: e.message }); }
+  }
+
+  async function connectDrive() {
+    try {
+      await requestDriveToken();
+      await loadDriveUser();
+      clearAlert('needs-token'); clearAlert('drive');
+      log('Drive conectado (permiso drive.file)');
+      const saved = state.profile && state.profile.drive;
+      const acct = state.driveUser && state.driveUser.emailAddress;
+      if (saved && saved.email && acct && saved.email.toLowerCase() !== acct.toLowerCase()) {
+        setAlert('drive', 'warn', 'Conectaste otra cuenta de Google (' + acct + ') distinta a la de tu carpeta guardada (' + saved.email + '). Elige la carpeta de nuevo.');
+      }
+      scheduleRender();
+    } catch (e) {
+      log('Error al conectar Drive', { msg: e.message });
+      setAlert('drive', 'error', e.message);
+    }
+  }
+
+  // =====================================================================
+  // GOOGLE DRIVE: SELECTOR DE ARCHIVOS (Picker)
+  // =====================================================================
+  async function loadPicker() {
+    if (state.pickerReady) return;
+    await waitFor(() => window.gapi && window.gapi.load, 'No se pudo cargar la librería de Google (api.js). Revisa tu conexión o bloqueadores.');
+    await new Promise((resolve, reject) => {
+      gapi.load('picker', { callback: resolve, onerror: () => reject(new AppError('network', 'No se pudo cargar el selector de Google.')), timeout: 10000, ontimeout: () => reject(new AppError('network', 'El selector de Google tardó demasiado en cargar.')) });
+    });
+    state.pickerReady = true;
+    log('Selector de Google cargado');
+  }
+
+  async function prepareDrive() {
+    if (!hasValidToken()) { await requestDriveToken(); await loadDriveUser(); }
+    await loadPicker();
+  }
+
+  function showPicker(view, title, multi, callback) {
+    const b = new google.picker.PickerBuilder()
+      .addView(view)
+      .setOAuthToken(state.driveToken)
+      .setDeveloperKey(GOOGLE_API_KEY)
+      .setAppId(PROJECT_NUMBER)
+      .setLocale('es')
+      .setTitle(title)
+      .setCallback(callback);
+    if (multi) b.enableFeature(google.picker.Feature.MULTISELECT_ENABLED);
+    b.build().setVisible(true);
+  }
+
+  async function chooseFolder() {
+    try {
+      await prepareDrive();
+      const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS).setSelectFolderEnabled(true);
+      log('Selector de carpeta abierto');
+      showPicker(view, 'Elige la carpeta donde guardas tus libros', false, async (data) => {
+        if (data.action === google.picker.Action.CANCEL) { log('Selector de carpeta cancelado'); return; }
+        if (data.action !== google.picker.Action.PICKED) return;
+        const d = data.docs && data.docs[0];
+        if (!d) return;
+        const drive = { folderId: d.id, folderName: d.name, email: (state.driveUser && state.driveUser.emailAddress) || null };
+        try {
+          await updateDoc(userRef(), { drive });
+          state.profile.drive = drive;
+          log('Carpeta elegida', { nombre: d.name, id: d.id });
+          renderAll();
+          setTimeout(chooseBooks, 300);   // siguiente paso natural: elegir los libros
+        } catch (e) { firestoreProblem(e); }
+      });
+    } catch (e) { log('Error al abrir el selector de carpeta', { msg: e.message }); setAlert('drive', 'error', e.message); }
+  }
+
+  async function chooseBooks() {
+    try {
+      await prepareDrive();
+      const parent = state.profile && state.profile.drive && state.profile.drive.folderId;
+      const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+        .setIncludeFolders(true)
+        .setSelectFolderEnabled(false)
+        .setMode(google.picker.DocsViewMode.LIST);
+      if (parent) view.setParent(parent);
+      const t0 = Date.now();
+      log('Selector de libros abierto', { carpetaInicial: parent || 'ninguna (Mi unidad)' });
+      showPicker(view, 'Marca los libros que quieres agregar', true, (data) => {
+        if (data.action === google.picker.Action.CANCEL) { log('Selector de libros cancelado'); return; }
+        if (data.action !== google.picker.Action.PICKED) return;
+        const docs = data.docs || [];
+        log('El selector devolvió archivos', { cantidad: docs.length, segundos: Math.round((Date.now() - t0) / 1000) });
+        addBooks(docs);
+      });
+    } catch (e) { log('Error al abrir el selector de libros', { msg: e.message }); setAlert('drive', 'error', e.message); }
+  }
+
+  async function addBooks(docs) {
+    const fresh = [], already = [], skipped = [];
+    for (const d of docs) {
+      if (!ACCEPTED[extOf(d.name)]) skipped.push(d);
+      else if (state.books.has(d.id)) already.push(d);
+      else fresh.push(d);
+    }
+    try {
+      for (let i = 0; i < fresh.length; i += WRITE_BATCH) {
+        const batch = writeBatch(db);
+        for (const d of fresh.slice(i, i + WRITE_BATCH)) {
+          batch.set(bookRef(d.id), {
+            name: d.name, mimeType: d.mimeType || '', size: Number(d.sizeBytes) || 0,
+            url: d.url || '', driveModified: Number(d.lastEditedUtc) || 0,
+            format: ACCEPTED[extOf(d.name)], title: '', author: '', isbn: '', cover: '', drm: false,
+            metaState: 'pending', metaError: '', status: 'todo', progress: 0, finishedAt: null,
+            addedAt: new Date().toISOString(),
+          });
+        }
+        await batch.commit();
+      }
+    } catch (e) { firestoreProblem(e); return; }
+    const parts = [fresh.length + ' agregados'];
+    if (already.length) parts.push(already.length + ' ya estaban');
+    if (skipped.length) parts.push(skipped.length + ' omitidos por no ser ' + Object.values(ACCEPTED).join('/'));
+    log('Libros agregados', { agregados: fresh.length, yaEstaban: already.length, omitidos: skipped.length });
+    setAlert('added', fresh.length ? 'ok' : 'info', 'Resultado: ' + parts.join(', ') + '.');
+  }
+
+  // =====================================================================
+  // LECTURA DE DATOS DEL EPUB (título, autor, ISBN, portada, DRM)
+  // =====================================================================
+  const FONT_ALGOS = ['http://www.idpf.org/2008/embedding', 'http://ansrv.com/2008/embedding', 'http://ns.adobe.com/pdf/enc#RC'];
+
+  function parseXml(text) {
+    const d = new DOMParser().parseFromString(text, 'application/xml');
+    if (d.getElementsByTagName('parsererror').length) throw new Error('xml inválido');
+    return d;
+  }
+
+  function resolvePath(base, href) {
+    const out = [];
+    for (const part of (base + href).split('/')) {
+      if (part === '..') out.pop(); else if (part && part !== '.') out.push(part);
+    }
+    return out.join('/');
+  }
+
+  async function makeThumb(bytes, mediaType) {
+    if (!/^image\/(jpeg|png|gif|webp)$/.test(mediaType)) return '';
+    const url = URL.createObjectURL(new Blob([bytes], { type: mediaType }));
+    try {
+      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('imagen')); i.src = url; });
+      const scale = Math.min(1, COVER_MAX_W / img.naturalWidth);
+      const w = Math.max(1, Math.round(img.naturalWidth * scale));
+      const h = Math.max(1, Math.round(img.naturalHeight * scale));
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      let q = 0.78, out = c.toDataURL('image/jpeg', q);
+      while (out.length > 70000 && q > 0.3) { q -= 0.15; out = c.toDataURL('image/jpeg', q); }
+      return out.length <= 90000 ? out : '';   // Firestore admite ~1 MB por documento
+    } finally { URL.revokeObjectURL(url); }
+  }
+
+  async function parseEpub(buf) {
+    const zip = await JSZip.loadAsync(buf);
+    const cf = zip.file('META-INF/container.xml');
+    if (!cf) throw new Error('sin container.xml');
+    const rootfile = parseXml(await cf.async('string')).getElementsByTagNameNS('*', 'rootfile')[0];
+    const opfPath = rootfile && rootfile.getAttribute('full-path');
+    if (!opfPath) throw new Error('sin OPF');
+    const opfFile = zip.file(opfPath) || zip.file(decodeURIComponent(opfPath));
+    if (!opfFile) throw new Error('OPF no encontrado');
+    const opf = parseXml(await opfFile.async('string'));
+    const tags = (name) => [...opf.getElementsByTagNameNS('*', name)];
+    const text = (n) => (n.textContent || '').replace(/\s+/g, ' ').trim();
+
+    const title = tags('title').map(text).find(Boolean) || '';
+    const author = tags('creator').map(text).filter(Boolean).join(', ');
+    let isbn = '';
+    for (const idn of tags('identifier')) {
+      const digits = text(idn).replace(/^urn:isbn:/i, '').replace(/[\s-]/g, '');
+      if (/^(97[89])?\d{9}[\dXx]$/.test(digits)) { isbn = digits; break; }
+    }
+
+    // Portada: EPUB3 (properties="cover-image"), EPUB2 (<meta name="cover">) o elemento con "cover" en el id
+    const items = tags('item');
+    let coverItem = items.find((i) => (i.getAttribute('properties') || '').split(/\s+/).includes('cover-image'));
+    if (!coverItem) {
+      const m = tags('meta').find((x) => x.getAttribute('name') === 'cover');
+      if (m) coverItem = items.find((i) => i.getAttribute('id') === m.getAttribute('content'));
+    }
+    if (!coverItem) coverItem = items.find((i) => /cover/i.test(i.getAttribute('id') || '') && /^image\//.test(i.getAttribute('media-type') || ''));
+    let cover = '';
+    if (coverItem) {
+      try {
+        const base = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
+        const href = decodeURIComponent(coverItem.getAttribute('href') || '');
+        const f = zip.file(resolvePath(base, href));
+        if (f) cover = await makeThumb(await f.async('uint8array'), coverItem.getAttribute('media-type') || '');
+      } catch (e) { log('Portada no legible', { msg: e.message }); }
+    }
+
+    // DRM: cualquier cifrado que no sea la ofuscación de tipografías
+    let drm = false;
+    const enc = zip.file('META-INF/encryption.xml');
+    if (enc) {
+      const xml = await enc.async('string');
+      const algos = [...xml.matchAll(/Algorithm="([^"]+)"/g)].map((m) => m[1]);
+      drm = algos.some((a) => !FONT_ALGOS.includes(a));
+    }
+    return { title, author, isbn, cover, drm };
+  }
+
+  async function downloadBook(id) {
+    const res = await driveFetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id) + '?alt=media&supportsAllDrives=true');
+    return res.arrayBuffer();
+  }
+
+  function enqueueMeta(id) {
+    if (state.queued.has(id)) return;
+    state.queued.add(id);
+    state.queue.push(id);
+    pump();
+  }
+
+  function pump() {
+    while (state.active < META_CONCURRENCY && state.queue.length) {
+      const id = state.queue.shift();
+      state.active++;
+      processBook(id)
+        .catch((e) => log('Error inesperado al procesar un libro', { msg: e && e.message }))
+        .finally(async () => { state.active--; state.queued.delete(id); await sleep(META_PAUSE_MS); pump(); renderDiag(); });
+    }
+  }
+
+  async function processBook(id) {
+    const book = state.books.get(id);
+    if (!book || book.metaState !== 'pending') return;
+    if (!hasValidToken()) { needsTokenAlert(); return; }
+    const fail = (msg) => updateDoc(bookRef(id), { metaState: 'error', metaError: msg }).catch(firestoreProblem);
+    if (book.size > MAX_EPUB_BYTES) return fail('El archivo es demasiado grande para leerlo aquí (' + formatSize(book.size) + ').');
+    let buf;
+    const t0 = performance.now();
+    try { buf = await downloadBook(id); }
+    catch (e) {
+      log('Descarga fallida', { libro: book.name, codigo: e.code, msg: e.message });
+      if (e.code === 'auth') { needsTokenAlert(); return; }          // sigue pendiente
+      return fail(e.message);
+    }
+    log('EPUB descargado', { libro: book.name, bytes: buf.byteLength, ms: Math.round(performance.now() - t0) });
+    try {
+      const meta = await parseEpub(buf);
+      await updateDoc(bookRef(id), { title: meta.title, author: meta.author, isbn: meta.isbn, cover: meta.cover, drm: meta.drm, metaState: 'ok', metaError: '' });
+      log('Datos leídos', { libro: book.name, titulo: meta.title, autor: meta.author, portada: !!meta.cover, drm: meta.drm });
+    } catch (e) {
+      log('EPUB ilegible', { libro: book.name, msg: e.message });
+      await fail('No pudimos leer este archivo. Puede tener protección DRM, estar incompleto o dañado.');
+    }
+  }
+
+  function needsTokenAlert() {
+    setAlert('needs-token', 'warn', 'Conecta Google Drive para leer los datos (título, autor y portada) de tus libros.', { label: 'Conectar Drive', onClick: connectDrive });
+  }
+
+  function requestMeta(id) {
+    const b = state.books.get(id);
+    if (!b || b.metaState !== 'pending') return;
+    if (!hasValidToken()) { needsTokenAlert(); return; }
+    enqueueMeta(id);
+  }
+
+  function getObserver() {
+    if (state.observer !== undefined) return state.observer;
+    state.observer = ('IntersectionObserver' in window)
+      ? new IntersectionObserver((entries) => {
+          for (const e of entries) {
+            if (e.isIntersecting) { state.observer.unobserve(e.target); requestMeta(e.target.dataset.id); }
+          }
+        }, { rootMargin: '200px' })
+      : null;
+    return state.observer;
+  }
+
+  // =====================================================================
+  // ACCIONES SOBRE LIBROS
+  // =====================================================================
+  const guard = (p) => p.catch(firestoreProblem);
+
+  function setStatus(book, status) {
+    const patch = { status };
+    if (status === 'read') { patch.progress = 100; patch.finishedAt = book.finishedAt || new Date().toISOString(); }
+    else { patch.finishedAt = null; patch.progress = status === 'todo' ? 0 : (book.progress === 100 ? 0 : book.progress || 0); }
+    return guard(updateDoc(bookRef(book.id), patch));
+  }
+
+  function setProgress(book, value) {
+    const n = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+    if (n === 100) return setStatus(book, 'read');
+    return guard(updateDoc(bookRef(book.id), { progress: n }));
+  }
+
+  const retryBook = (b) => guard(updateDoc(bookRef(b.id), { metaState: 'pending', metaError: '' }));
+  const ignoreBook = (b) => guard(updateDoc(bookRef(b.id), { metaState: 'ignored' }));
+  const restoreBook = (b) => guard(updateDoc(bookRef(b.id), { metaState: 'pending', metaError: '' }));
+  function removeBook(b) {
+    if (confirm('¿Quitar "' + bookTitle(b) + '" de tu biblioteca? El archivo no se borra de tu Drive.')) guard(deleteDoc(bookRef(b.id)));
+  }
+
+  async function saveGoal() {
+    const n = Math.round(Number($('goal-input').value));
+    if (!(n >= 1 && n <= 1000)) { $('goal-input').focus(); return; }
+    try { await updateDoc(userRef(), { goalBooks: n }); state.profile.goalBooks = n; state.editingGoal = false; renderAll(); }
+    catch (e) { firestoreProblem(e); }
+  }
+
+  // =====================================================================
+  // INTERFAZ
+  // =====================================================================
+  let renderTimer = null;
+  function scheduleRender() { clearTimeout(renderTimer); renderTimer = setTimeout(renderAll, 60); }
+
+  function renderAll() {
+    if (!state.user) return;
+    renderGoal(); renderCounts(); renderDrivePanel(); renderGrid(); renderDiag();
+  }
+
+  function yearStats() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const start = new Date(year, 0, 1);
+    const dayOfYear = Math.floor((now - start) / 86400000) + 1;
+    const daysInYear = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 366 : 365;
+    let read = 0;
+    for (const b of state.books.values()) {
+      if (b.status === 'read' && b.finishedAt && new Date(b.finishedAt).getFullYear() === year) read++;
+    }
+    return { year, dayOfYear, daysInYear, read };
+  }
+
+  function renderGoal() {
+    const goal = state.profile && state.profile.goalBooks;
+    const empty = $('goal-empty'), ring = $('goal-ring');
+    const editing = state.editingGoal || !goal;
+    $('goal-cancel').classList.toggle('hidden', !goal);
+    if (editing) {
+      empty.classList.remove('hidden'); ring.classList.add('hidden'); ring.classList.remove('flex');
+      $('ring-pace').classList.add('hidden'); $('ring-proj').classList.add('hidden');
+      return;
+    }
+    empty.classList.add('hidden'); ring.classList.remove('hidden'); ring.classList.add('flex');
+    const { year, dayOfYear, daysInYear, read } = yearStats();
+    const pct = Math.min(100, Math.round((read / goal) * 100));
+    $('ring-arc').setAttribute('stroke-dashoffset', String(263.9 * (1 - pct / 100)));
+    $('ring-pct').textContent = pct + '%';
+    $('ring-detail').textContent = read + ' de ' + goal + ' libros en ' + year;
+    const expected = goal * dayOfYear / daysInYear;
+    const diff = read - expected;
+    const pace = $('ring-pace');
+    pace.textContent = Math.abs(diff) < 0.5 ? 'Vas al día con tu meta.'
+      : diff > 0 ? 'Vas ' + diff.toFixed(1) + ' libros adelantado.' : 'Vas ' + Math.abs(diff).toFixed(1) + ' libros atrasado.';
+    pace.classList.remove('hidden');
+    const proj = Math.round(read / dayOfYear * daysInYear);
+    const pr = $('ring-proj');
+    pr.textContent = 'A este ritmo terminarás el año con ' + proj + (proj === 1 ? ' libro.' : ' libros.');
+    pr.classList.remove('hidden');
+  }
+
+  function renderCounts() {
+    let total = 0, reading = 0, read = 0;
+    for (const b of state.books.values()) {
+      if (b.metaState === 'ignored') continue;
+      total++;
+      if (b.status === 'reading') reading++; else if (b.status === 'read') read++;
+    }
+    $('cnt-total').textContent = String(total);
+    $('cnt-reading').textContent = String(reading);
+    $('cnt-read').textContent = String(read);
+  }
+
+  function driveButton(label, onClick, primary) {
+    const b = el('button', primary
+      ? 'rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-100 disabled:opacity-50'
+      : 'rounded-lg border border-indigo-500 px-3 py-2 text-xs font-medium text-indigo-100 hover:bg-indigo-900/60 disabled:opacity-50', label);
+    b.type = 'button'; b.disabled = !driveOk; b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function renderDrivePanel() {
+    const status = $('drive-status'), folder = $('drive-folder'), actions = $('drive-actions');
+    actions.replaceChildren();
+    const saved = state.profile && state.profile.drive;
+    folder.textContent = saved ? 'Carpeta: ' + saved.folderName : '';
+    if (!driveOk) { status.textContent = 'Faltan GOOGLE_CLIENT_ID o GOOGLE_API_KEY en la configuración.'; return; }
+    if (!hasValidToken()) {
+      status.textContent = saved ? 'Vuelve a conectar Drive para leer los datos de tus libros y agregar nuevos.' : 'Conecta tu Google Drive para empezar.';
+      actions.appendChild(driveButton('Conectar Google Drive', connectDrive, true));
+      if (saved) actions.appendChild(driveButton('Cambiar carpeta', chooseFolder, false));
+      return;
+    }
+    const acct = state.driveUser && state.driveUser.emailAddress;
+    status.textContent = 'Conectado' + (acct ? ' como ' + acct : '') + '.';
+    if (!saved) {
+      actions.appendChild(driveButton('Elegir carpeta de libros', chooseFolder, true));
+    } else {
+      actions.appendChild(driveButton('Agregar libros', chooseBooks, true));
+      actions.appendChild(driveButton('Cambiar carpeta', chooseFolder, false));
+    }
+  }
+
+  function showStatus(title, body) {
+    $('status-title').textContent = title;
+    $('status-body').textContent = body || '';
+    $('status-box').classList.remove('hidden');
+    $('books-grid').classList.add('hidden');
+    $('library-meta').classList.add('hidden'); $('library-meta').classList.remove('flex');
+  }
+
+  function statusStyle(sel) {
+    const s = {
+      todo: 'border-slate-600 bg-slate-800 text-slate-300',
+      reading: 'border-amber-700 bg-amber-950 text-amber-300',
+      read: 'border-emerald-700 bg-emerald-950 text-emerald-300',
+    };
+    sel.className = 'rounded-lg border px-2 py-1.5 text-xs ' + s[sel.value];
+  }
+
+  function buildCard(book) {
+    const card = el('article', 'flex flex-col justify-between rounded-xl border border-slate-700 bg-slate-900 p-4');
+    const top = el('div');
+
+    const thumb = el('div', 'relative mb-3 flex h-48 items-center justify-center overflow-hidden rounded-lg bg-slate-800 text-slate-500');
+    if (book.cover) {
+      const img = el('img', 'h-full w-full object-cover');
+      img.alt = 'Portada de ' + bookTitle(book);
+      img.src = book.cover;
+      thumb.appendChild(img);
+    } else {
+      const ph = el('div', 'px-4 text-center text-xs');
+      ph.textContent = book.metaState === 'pending' ? 'Leyendo datos del libro...' : (book.metaState === 'error' ? 'Sin portada' : book.format);
+      thumb.appendChild(ph);
+    }
+    thumb.appendChild(el('span', 'absolute left-2 top-2 rounded bg-slate-900/85 px-2 py-0.5 text-[11px] font-medium text-slate-200', book.format || ''));
+    if (book.drm) thumb.appendChild(el('span', 'absolute right-2 top-2 rounded bg-amber-900/90 px-2 py-0.5 text-[11px] font-medium text-amber-200', 'DRM'));
+    top.appendChild(thumb);
+
+    const h = el('h3', 'line-clamp-2 break-words text-sm font-medium text-white', bookTitle(book));
+    h.title = book.name;
+    top.appendChild(h);
+    if (book.author) top.appendChild(el('p', 'mt-1 truncate text-xs text-indigo-300', book.author));
+    const sz = formatSize(book.size);
+    if (sz) top.appendChild(el('p', 'mt-1 text-[11px] text-slate-500', sz));
+
+    if (book.metaState === 'error') {
+      const box = el('div', 'mt-3 rounded-lg border border-red-900 bg-red-950/50 p-2 text-xs text-red-200');
+      box.appendChild(el('p', '', book.metaError || 'No pudimos leer este archivo.'));
+      const row = el('div', 'mt-2 flex gap-2');
+      const r = el('button', 'rounded bg-white px-2 py-1 text-[11px] font-semibold text-slate-900', 'Reintentar'); r.type = 'button'; r.addEventListener('click', () => retryBook(book));
+      const i = el('button', 'rounded border border-red-400 px-2 py-1 text-[11px]', 'Ignorar'); i.type = 'button'; i.addEventListener('click', () => ignoreBook(book));
+      row.append(r, i); box.appendChild(row); top.appendChild(box);
+    } else if (book.metaState === 'ignored') {
+      const row = el('div', 'mt-3 flex items-center gap-2 text-xs text-slate-400');
+      row.appendChild(el('span', '', 'Ignorado.'));
+      const r = el('button', 'underline hover:text-white', 'Intentar de nuevo'); r.type = 'button'; r.addEventListener('click', () => restoreBook(book));
+      row.appendChild(r); top.appendChild(row);
+    }
+    card.appendChild(top);
+
+    const foot = el('div', 'mt-4 space-y-2 border-t border-slate-800 pt-3');
+    const row1 = el('div', 'flex items-center justify-between gap-2');
+    const sel = el('select');
+    for (const [v, l] of [['todo', 'Por leer'], ['reading', 'Leyendo'], ['read', 'Leído']]) { const o = el('option', '', l); o.value = v; sel.appendChild(o); }
+    sel.value = book.status || 'todo';
+    sel.setAttribute('aria-label', 'Estado de lectura de ' + bookTitle(book));
+    statusStyle(sel);
+    sel.addEventListener('change', () => { statusStyle(sel); setStatus(book, sel.value); });
+    row1.appendChild(sel);
+    if (/^https:\/\/(drive|docs)\.google\.com\//.test(book.url || '')) {
+      const a = el('a', 'text-xs font-semibold text-indigo-400 hover:underline', 'Abrir en Drive');
+      a.href = book.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      row1.appendChild(a);
+    }
+    foot.appendChild(row1);
+
+    if (book.status === 'reading') {
+      const pr = el('div', 'flex items-center gap-2');
+      const bar = el('div', 'h-1.5 flex-1 overflow-hidden rounded bg-slate-700');
+      const fill = el('div', 'h-full bg-amber-400'); fill.style.width = (book.progress || 0) + '%';
+      bar.appendChild(fill);
+      const inp = el('input', 'w-14 rounded border border-slate-700 bg-slate-900 px-1 py-0.5 text-right text-xs text-white');
+      inp.type = 'number'; inp.min = '0'; inp.max = '100'; inp.value = String(book.progress || 0);
+      inp.setAttribute('aria-label', 'Porcentaje leído de ' + bookTitle(book));
+      inp.addEventListener('change', () => setProgress(book, inp.value));
+      pr.append(bar, inp, el('span', 'text-xs text-slate-500', '%'));
+      foot.appendChild(pr);
+    }
+    const rm = el('button', 'text-[11px] text-slate-500 underline hover:text-red-300', 'Quitar de mi biblioteca');
+    rm.type = 'button'; rm.addEventListener('click', () => removeBook(book));
+    foot.appendChild(rm);
+    card.appendChild(foot);
+
+    if (book.metaState === 'pending') {
+      card.dataset.id = book.id;
+      const obs = getObserver();
+      if (obs) obs.observe(card); else requestMeta(book.id);
+    }
+    return card;
+  }
+
+  function renderGrid() {
+    const all = [...state.books.values()];
+    const ignored = all.filter((b) => b.metaState === 'ignored');
+    const visible = all.filter((b) => state.showIgnored || b.metaState !== 'ignored');
+    if (state.observer) state.observer.disconnect();
+
+    if (!all.length) {
+      const saved = state.profile && state.profile.drive;
+      showStatus('Aún no agregaste libros',
+        saved ? 'Presiona "Agregar libros" y marca los que quieres ver aquí.' : 'Conecta tu Google Drive, elige tu carpeta de libros y marca los libros que quieres agregar.');
+      return;
+    }
+    const q = norm(state.query.trim());
+    const list = visible.filter((b) => {
+      if (state.filter !== 'all' && (b.status || 'todo') !== state.filter) return false;
+      return !q || norm(bookTitle(b)).includes(q) || norm(b.author).includes(q) || norm(b.name).includes(q);
+    });
+    const byText = (f) => (a, b) => f(a).localeCompare(f(b), 'es', { numeric: true, sensitivity: 'base' });
+    if (state.sort === 'recent') list.sort((a, b) => String(b.addedAt).localeCompare(String(a.addedAt)));
+    else if (state.sort === 'author') list.sort(byText((b) => b.author || 'zzz'));
+    else list.sort(byText(bookTitle));
+
+    const meta = $('library-meta');
+    meta.classList.remove('hidden'); meta.classList.add('flex');
+    $('results-count').textContent = 'Mostrando ' + list.length + ' de ' + visible.length;
+    const tg = $('ignored-toggle');
+    tg.classList.toggle('hidden', !ignored.length);
+    tg.textContent = (state.showIgnored ? 'Ocultar' : 'Mostrar') + ' ignorados (' + ignored.length + ')';
+
+    const grid = $('books-grid');
+    grid.replaceChildren();
+    if (!list.length) { showStatus('Ningún libro coincide', 'Prueba con otra búsqueda o cambia el filtro.'); meta.classList.remove('hidden'); meta.classList.add('flex'); return; }
+    for (const b of list) grid.appendChild(buildCard(b));
+    $('status-box').classList.add('hidden');
+    grid.classList.remove('hidden');
+  }
+
+  function renderDiag() {
+    const rows = [
+      ['Firebase', state.user ? 'usuario ' + state.user.uid.slice(0, 8) + '… (correo verificado: ' + (state.user.emailVerified ? 'sí' : 'no') + ')' : '—'],
+      ['Firestore', state.books.size + ' libros sincronizados'],
+      ['Drive', hasValidToken() ? 'token vigente (' + Math.max(0, Math.round((state.driveExpires - Date.now()) / 60000)) + ' min)' : 'sin token'],
+      ['Cuenta de Drive', (state.driveUser && state.driveUser.emailAddress) || '—'],
+      ['Carpeta', (state.profile && state.profile.drive && state.profile.drive.folderName) || '—'],
+      ['Selector de Google', state.pickerReady ? 'cargado' : 'sin cargar'],
+      ['Lectura de EPUB', state.active + ' en curso, ' + state.queue.length + ' en cola'],
+      ['Origen', location.origin],
+    ];
+    const dl = $('diag');
+    dl.replaceChildren();
+    for (const [k, v] of rows) {
+      const d = el('div', 'flex gap-2');
+      d.append(el('dt', 'w-32 shrink-0 text-slate-500', k), el('dd', 'min-w-0 break-words text-slate-300', v));
+      dl.appendChild(d);
+    }
+  }
+
+  async function copyLog() {
+    try { await navigator.clipboard.writeText(state.logs.join('\n')); setAlert('copy', 'ok', 'Registro copiado al portapapeles.'); }
+    catch (e) { setAlert('copy', 'warn', 'No se pudo copiar. Selecciona el texto del registro y cópialo a mano.'); }
+  }
+
+  // =====================================================================
+  // ARRANQUE
+  // =====================================================================
+  function configProblems() {
+    const p = [];
+    if (location.protocol === 'file:') p.push('Abriste este archivo directamente desde tu computadora. Google y Firebase no permiten iniciar sesión así. Publícalo en GitHub Pages o ábrelo desde un servidor local (por ejemplo http://localhost:5500).');
+    if (isPlaceholder(FIREBASE_CONFIG.apiKey) || isPlaceholder(FIREBASE_CONFIG.projectId) || isPlaceholder(FIREBASE_CONFIG.appId)) p.push('Falta completar FIREBASE_CONFIG (apiKey, projectId, appId y messagingSenderId) al inicio del script.');
+    if (isPlaceholder(GOOGLE_CLIENT_ID) || isPlaceholder(GOOGLE_API_KEY)) p.push('Falta completar GOOGLE_CLIENT_ID y GOOGLE_API_KEY. Sin ellos no se puede conectar Drive.');
+    return p;
+  }
+
+  function init() {
+    $('tab-signin').addEventListener('click', () => setMode('signin'));
+    $('tab-signup').addEventListener('click', () => setMode('signup'));
+    $('auth-form').addEventListener('submit', onAuthSubmit);
+    $('google-btn').addEventListener('click', onGoogleSignIn);
+    $('forgot-btn').addEventListener('click', onForgot);
+    $('verify-check').addEventListener('click', onVerifyCheck);
+    $('verify-resend').addEventListener('click', onVerifyResend);
+    $('verify-signout').addEventListener('click', doSignOut);
+    $('logout-btn').addEventListener('click', doSignOut);
+    $('goal-save').addEventListener('click', saveGoal);
+    $('goal-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveGoal(); });
+    $('goal-edit').addEventListener('click', () => { state.editingGoal = true; renderGoal(); $('goal-input').value = state.profile.goalBooks || ''; $('goal-input').focus(); });
+    $('goal-cancel').addEventListener('click', () => { state.editingGoal = false; renderGoal(); });
+    $('search').addEventListener('input', (e) => { state.query = e.target.value; renderGrid(); });
+    $('filter-status').addEventListener('change', (e) => { state.filter = e.target.value; renderGrid(); });
+    $('sort-by').addEventListener('change', (e) => { state.sort = e.target.value; renderGrid(); });
+    $('ignored-toggle').addEventListener('click', () => { state.showIgnored = !state.showIgnored; renderGrid(); });
+    $('log-copy').addEventListener('click', copyLog);
+    setMode('signin');
+
+    const problems = configProblems();
+    if (problems.length) {
+      const box = $('config-warning');
+      for (const t of problems) box.appendChild(el('p', '', t));
+      box.classList.remove('hidden');
+    }
+    const fileProto = location.protocol === 'file:';
+    firebaseOk = !fileProto && !isPlaceholder(FIREBASE_CONFIG.apiKey) && !isPlaceholder(FIREBASE_CONFIG.projectId) && !isPlaceholder(FIREBASE_CONFIG.appId);
+    driveOk = !fileProto && !isPlaceholder(GOOGLE_CLIENT_ID) && !isPlaceholder(GOOGLE_API_KEY) && !isPlaceholder(PROJECT_NUMBER);
+    setAuthBusy(false);
+    showView('login');
+    if (!firebaseOk) return;
+
+    app = initializeApp(FIREBASE_CONFIG);
+    auth = getAuth(app);
+    db = getFirestore(app);
+    onAuthStateChanged(auth, (user) => {
+      if (!user) { teardownApp(); showView('login'); return; }
+      if (!user.emailVerified) {
+        $('verify-email').textContent = user.email || '';
+        $('verify-msg').textContent = '';
+        showView('verify');
+        return;
+      }
+      startApp(user);
+    });
+  }
+
+  setInterval(() => { if (state.user) { renderDrivePanel(); renderDiag(); } }, 60000);
+  init();
+  </script>
+</body>
+</html>
