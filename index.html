@@ -195,9 +195,8 @@
     messagingSenderId: "191419867573",   // número de proyecto
   };
 
-  // Completa estos dos valores obtenidos de la Consola de Google Cloud:
-  const GOOGLE_CLIENT_ID = 'TU_CLIENT_ID_DE_GOOGLE_CLOUD.apps.googleusercontent.com';  // Credencial OAuth 2.0 (Aplicación web)
-  const GOOGLE_API_KEY = 'TU_API_KEY_DE_GOOGLE_CLOUD';                                // Clave de API con Picker y Drive API
+  const GOOGLE_CLIENT_ID = '191419867573-q4kjumar06e5q11vasth81ui6e9h1no4.apps.googleusercontent.com';
+  const GOOGLE_API_KEY = 'AIzaSyCNz2JKYljXbbPF_fjsm-Q7h5hy2_-6ckc';
 
   // Permiso de Drive: solo los archivos que el usuario elige con el selector de Google
   const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
@@ -1137,7 +1136,7 @@
   function configProblems() {
     const p = [];
     if (location.protocol === 'file:') p.push('Abriste este archivo directamente desde tu computadora. Google y Firebase no permiten iniciar sesión así. Publícalo en GitHub Pages o ábrelo desde un servidor local (por ejemplo http://localhost:5500).');
-    if (isPlaceholder(FIREBASE_CONFIG.apiKey) || isPlaceholder(FIREBASE_CONFIG.projectId) || isPlaceholder(FIREBASE_CONFIG.appId)) p.push('Falta completar FIREBASE_CONFIG al inicio del script.');
+    if (isPlaceholder(FIREBASE_CONFIG.apiKey) || isPlaceholder(FIREBASE_CONFIG.projectId) || isPlaceholder(FIREBASE_CONFIG.appId)) p.push('Falta completar FIREBASE_CONFIG (apiKey, projectId, appId y messagingSenderId) al inicio del script.');
     if (isPlaceholder(GOOGLE_CLIENT_ID) || isPlaceholder(GOOGLE_API_KEY)) p.push('Falta completar GOOGLE_CLIENT_ID y GOOGLE_API_KEY. Sin ellos no se puede conectar Drive.');
     return p;
   }
